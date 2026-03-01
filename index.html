@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>UNIVERSE — Interactive Particle Cosmos</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+
+#start-overlay {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at center, rgba(10,10,30,0.95) 0%, rgba(0,0,0,0.98) 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 100; cursor: pointer; user-select: none;
+}
+#start-overlay h1 {
+  color: #fff; font-family: 'Courier New', monospace;
+  font-size: clamp(32px, 6vw, 64px); letter-spacing: 12px; margin-bottom: 16px;
+  text-shadow: 0 0 40px rgba(100,130,255,0.8);
+}
+#start-overlay p {
+  color: rgba(255,255,255,0.4); font-family: 'Courier New', monospace;
+  font-size: 13px; letter-spacing: 4px; animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:0.9} }
+
+#ui {
+  position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; z-index: 10; flex-wrap: wrap; justify-content: center;
+}
+.btn {
+  background: rgba(15,15,25,0.85); border: 1px solid rgba(255,255,255,0.18);
+  color: rgba(255,255,255,0.65); padding: 7px 15px; cursor: pointer;
+  border-radius: 3px; font-family: 'Courier New', monospace; font-size: 11px;
+  letter-spacing: 1.5px; text-transform: uppercase; transition: all 0.15s;
+  user-select: none; backdrop-filter: blur(4px);
+}
+.btn:hover { background: rgba(40,40,70,0.9); color: #fff; border-color: rgba(255,255,255,0.45); }
+.btn.active { background: rgba(60,70,160,0.9); color: #fff; border-color: rgba(120,140,255,0.8); box-shadow: 0 0 12px rgba(100,120,255,0.3); }
+
+#color-panel {
+  position: fixed; right: 18px; top: 50%; transform: translateY(-50%);
+  background: rgba(10,10,20,0.82); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; padding: 14px 12px; z-index: 10;
+  display: flex; flex-direction: column; gap: 10px; min-width: 116px;
+  backdrop-filter: blur(4px);
+}
+.slider-row { display: flex; flex-direction: column; gap: 4px; }
+.slider-label { color: rgba(255,255,255,0.4); font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 1.5px; }
+input[type=range] { width: 100%; cursor: pointer; accent-color: #6688ff; height: 3px; }
+
+#quality-btn { position: fixed; bottom: 20px; left: 20px; z-index: 10; }
+
+#vol-row {
+  position: fixed; bottom: 20px; right: 20px; z-index: 10;
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(10,10,20,0.82); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px; padding: 8px 12px; backdrop-filter: blur(4px);
+}
+#vol-row .slider-label { color: rgba(255,255,255,0.4); font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 1.5px; }
+#vol-row input[type=range] { width: 80px; }
+
+#info {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  color: rgba(255,255,255,0.2); font-family: 'Courier New', monospace; font-size: 10px;
+  letter-spacing: 2px; z-index: 10; text-align: center; pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="start-overlay">
+  <h1>UNIVERSE</h1>
+  <p>CLICK TO BEGIN</p>
+</div>
+
+<div id="ui">
+  <button class="btn active" data-mode="0">1&nbsp;NEBULA</button>
+  <button class="btn" data-mode="1">2&nbsp;GALAXY</button>
+  <button class="btn" data-mode="2">3&nbsp;BLACK HOLE</button>
+  <button class="btn" data-mode="3">4&nbsp;VORTEX</button>
+  <button class="btn" data-mode="4">5&nbsp;WARP</button>
+</div>
+
+<div id="color-panel">
+  <div class="slider-row"><span class="slider-label">RED</span><input type="range" id="r-sl" min="0" max="255" value="100"></div>
+  <div class="slider-row"><span class="slider-label">GREEN</span><input type="range" id="g-sl" min="0" max="255" value="130"></div>
+  <div class="slider-row"><span class="slider-label">BLUE</span><input type="range" id="b-sl" min="0" max="255" value="255"></div>
+</div>
+
+<button class="btn" id="quality-btn">MEDIUM</button>
+
+<div id="vol-row">
+  <span class="slider-label">VOL</span>
+  <input type="range" id="vol-sl" min="0" max="100" value="30">
+</div>
+
+<div id="info">MOUSE MOVE: ORBIT &nbsp;|&nbsp; HOLD: ATTRACT &nbsp;|&nbsp; CLICK: SHOCKWAVE &nbsp;|&nbsp; WHEEL: ZOOM &nbsp;|&nbsp; KEYS 1–5: MODE</div>
+
+<script>
+'use strict';
+
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const QUALITY_LABELS  = ['LOW', 'MEDIUM', 'HIGH'];
+const PARTICLE_COUNTS = [40000, 100000, 200000];
+let qualityLevel = 1;
+
+// ─── SHARED GLSL ─────────────────────────────────────────────────────────────
+const NOISE_GLSL = `
+float hashf(float n) { return fract(sin(n) * 43758.5453123); }
+float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+
+float noise3(vec3 x) {
+  vec3 i = floor(x), f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(hash3(i+vec3(0,0,0)), hash3(i+vec3(1,0,0)), f.x),
+        mix(hash3(i+vec3(0,1,0)), hash3(i+vec3(1,1,0)), f.x), f.y),
+    mix(mix(hash3(i+vec3(0,0,1)), hash3(i+vec3(1,0,1)), f.x),
+        mix(hash3(i+vec3(0,1,1)), hash3(i+vec3(1,1,1)), f.x), f.y), f.z);
+}
+
+vec3 curlNoise(vec3 p) {
+  float e = 0.1;
+  float nx0 = noise3(p - vec3(e,0,0)), nx1 = noise3(p + vec3(e,0,0));
+  float ny0 = noise3(p - vec3(0,e,0)), ny1 = noise3(p + vec3(0,e,0));
+  float nz0 = noise3(p - vec3(0,0,e)), nz1 = noise3(p + vec3(0,0,e));
+  return vec3(ny1-ny0-(nz1-nz0), nz1-nz0-(nx1-nx0), nx1-nx0-(ny1-ny0)) / (2.0*e);
+}
+`;
+
+// ─── UPDATE SHADER (Transform Feedback) ──────────────────────────────────────
+const UPDATE_VS = `#version 300 es
+precision highp float;
+
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_vel;
+layout(location=2) in float a_life;
+layout(location=3) in float a_seed;
+
+out vec3  v_pos;
+out vec3  v_vel;
+out float v_life;
+out float v_seed;
+
+uniform float u_time;
+uniform float u_dt;
+uniform int   u_mode;
+uniform vec3  u_mouse3D;
+uniform float u_attract;
+uniform float u_shock;
+uniform vec3  u_shockCenter;
+
+${NOISE_GLSL}
+
+vec3 spawnPos(float sd, int mode) {
+  float a = hashf(sd*1.1+0.3)*6.2832, b = hashf(sd*2.3+0.7)*6.2832;
+  float r = hashf(sd*3.7+1.1);
+  if (mode==0) { // nebula
+    return vec3((hashf(sd*5.1)-0.5)*4.0,(hashf(sd*6.2)-0.5)*4.0,(hashf(sd*7.3)-0.5)*4.0);
+  } else if (mode==1) { // galaxy
+    float d=r*r*3.0, ang=a+d*1.8;
+    return vec3(cos(ang)*d,(hashf(sd*4.4)-0.5)*0.3*(1.0-r),sin(ang)*d);
+  } else if (mode==2) { // black hole
+    float d=0.2+r*2.5;
+    return vec3(cos(a)*d,(hashf(sd*4.1)-0.5)*0.5,sin(a)*d);
+  } else if (mode==3) { // vortex
+    float t=hashf(sd*5.5), d=0.3+hashf(sd*6.6)*1.5;
+    return vec3(cos(a)*d,t*4.0-2.0,sin(a)*d);
+  } else { // warp
+    return vec3((hashf(sd*5.1)-0.5)*3.0,(hashf(sd*6.2)-0.5)*3.0,hashf(sd*7.3)*8.0-4.0);
+  }
+}
+
+vec3 spawnVel(vec3 p, float sd, int mode) {
+  if (mode==0) return curlNoise(p*0.5)*0.3;
+  if (mode==1) {
+    float d=length(p.xz); vec3 t=normalize(vec3(-p.z,0,p.x));
+    return t*sqrt(max(0.1,1.0/(d+0.5)))*0.5;
+  }
+  if (mode==2) {
+    float d=length(p.xz); vec3 t=normalize(vec3(-p.z,0,p.x));
+    return t*0.8/(d+0.3);
+  }
+  if (mode==3) {
+    float d=length(p.xz); vec3 t=normalize(vec3(-p.z,0,p.x));
+    return t*0.6+vec3(0,0.3,0);
+  }
+  return vec3(0,0,-1.5-hashf(sd)*1.0);
+}
+
+void main() {
+  vec3  pos  = a_pos;
+  vec3  vel  = a_vel;
+  float life = a_life - u_dt;
+  float seed = a_seed;
+
+  bool dead = (life <= 0.0)
+    || (u_mode == 4 && pos.z < -5.5)
+    || (u_mode != 4 && length(pos) > 9.0);
+
+  if (dead) {
+    seed = hashf(seed + u_time*0.001 + float(gl_VertexID)*0.0001);
+    pos  = spawnPos(seed, u_mode);
+    vel  = spawnVel(pos, seed, u_mode);
+    life = 1.5 + hashf(seed*2.0)*3.5;
+    v_pos=pos; v_vel=vel; v_life=life; v_seed=seed;
+    return;
+  }
+
+  float dt = u_dt;
+
+  if (u_mode==0) {
+    vec3 curl = curlNoise(pos*0.4 + u_time*0.05);
+    vel += curl * dt * 0.6;
+    vel *= 1.0 - dt * 1.2;
+  } else if (u_mode==1) {
+    float d = length(pos.xz)+0.001;
+    vec3  tg = normalize(vec3(-pos.z,0,pos.x));
+    vel += (tg*sqrt(1.0/(d+0.3))*0.5 - vel)*dt*2.0;
+    vel.y -= vel.y * dt * 4.0;
+  } else if (u_mode==2) {
+    float d = length(pos)+0.001;
+    vel += -normalize(pos)*0.4/(d*d+0.15)*dt;
+    vel += normalize(cross(pos,vec3(0,1,0))+vec3(0.001))*0.25*dt;
+    vel *= 1.0 - dt * 0.5;
+  } else if (u_mode==3) {
+    float d = length(pos.xz)+0.001;
+    vec3 tg = normalize(vec3(-pos.z,0,pos.x));
+    vel.x += (tg.x*0.8/d - vel.x)*dt*3.0;
+    vel.z += (tg.z*0.8/d - vel.z)*dt*3.0;
+    vel.y += (0.4 - pos.y*0.12 - vel.y)*dt*2.5;
+  } else {
+    vel.z += (-2.0 - vel.z)*dt*2.0;
+    float n = noise3(pos*2.5+u_time*0.3)-0.5;
+    vel.x += n*dt*0.4; vel.y += n*dt*0.4;
+  }
+
+  // Mouse attraction / repulsion
+  if (u_attract > 0.0) {
+    vec3 toM = u_mouse3D - pos;
+    float d2 = dot(toM,toM)+0.5;
+    vel += normalize(toM) * u_attract * 1.5 / d2 * dt;
+  }
+
+  // Shockwave ring
+  if (u_shock > 0.0) {
+    vec3 away = pos - u_shockCenter;
+    float d = length(away);
+    float waveFront = u_shock * 3.5;
+    float diff = abs(d - waveFront);
+    if (diff < 0.6) {
+      vel += normalize(away+vec3(0.001)) * (0.6-diff) * 6.0 * (1.0-u_shock);
+    }
+  }
+
+  pos += vel * dt;
+  v_pos=pos; v_vel=vel; v_life=life; v_seed=seed;
+}`;
+
+const UPDATE_FS = `#version 300 es
+precision highp float;
+out vec4 o_col;
+void main() { o_col = vec4(0.0); }`;
+
+// ─── RENDER SHADER ───────────────────────────────────────────────────────────
+const RENDER_VS = `#version 300 es
+precision highp float;
+
+layout(location=0) in vec3  a_pos;
+layout(location=1) in vec3  a_vel;
+layout(location=2) in float a_life;
+layout(location=3) in float a_seed;
+
+out vec4  v_col;
+out float v_r;
+
+uniform mat4  u_mvp;
+uniform vec3  u_color;
+uniform int   u_mode;
+uniform float u_audio;
+
+void main() {
+  gl_Position = u_mvp * vec4(a_pos, 1.0);
+
+  float spd  = length(a_vel);
+  float lifeN = clamp(a_life / 4.0, 0.0, 1.0);
+  float fade  = lifeN * (2.0 - lifeN);
+
+  vec3 col = u_color;
+  if (u_mode==0) {
+    col = mix(col, vec3(col.z, col.x*0.8, col.y*1.2), clamp(spd*3.0,0.0,1.0));
+  } else if (u_mode==1) {
+    float d = length(a_pos.xz);
+    col = mix(vec3(1.0,0.85,0.5), col, clamp(d*0.38,0.0,1.0));
+  } else if (u_mode==2) {
+    float d = length(a_pos);
+    col = mix(vec3(1.0,0.25,0.05), col, clamp(d*0.45,0.0,1.0));
+  } else if (u_mode==3) {
+    float ht = clamp((a_pos.y+2.0)/4.0, 0.0, 1.0);
+    col = mix(col, vec3(col.z*1.3, col.y*0.5, col.x*0.8), ht);
+  } else {
+    col = mix(col*0.4, vec3(1.0), clamp(spd*0.35,0.0,0.9));
+  }
+
+  col *= 1.0 + u_audio * 0.6;
+  float alpha = fade * clamp(1.0 - spd*0.08, 0.25, 1.0);
+  v_col = vec4(col * alpha, alpha);
+  v_r = clamp(1.5 + spd*2.0 + u_audio*4.0, 1.0, 7.0);
+  gl_PointSize = v_r;
+}`;
+
+const RENDER_FS = `#version 300 es
+precision highp float;
+in vec4  v_col;
+in float v_r;
+out vec4 fragColor;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  float r = length(c);
+  if (r > 0.5) discard;
+  float a = v_col.a * (1.0 - r * 2.0);
+  fragColor = vec4(v_col.rgb, a);
+}`;
+
+// ─── STARS SHADERS ───────────────────────────────────────────────────────────
+const STARS_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3  a_pos;
+layout(location=1) in float a_bright;
+out float v_b;
+uniform mat4 u_mvp;
+void main() {
+  gl_Position = u_mvp * vec4(a_pos * 55.0, 1.0);
+  gl_PointSize = a_bright * 2.2 + 0.4;
+  v_b = a_bright;
+}`;
+
+const STARS_FS = `#version 300 es
+precision highp float;
+in float v_b;
+out vec4 fragColor;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  float r = length(c);
+  if (r > 0.5) discard;
+  fragColor = vec4(vec3(1.0), v_b * (1.0 - r*2.0) * 0.75);
+}`;
+
+// ─── POST-PROCESSING SHADERS ─────────────────────────────────────────────────
+const QUAD_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 a_pos;
+out vec2 v_uv;
+void main() { v_uv = a_pos*0.5+0.5; gl_Position = vec4(a_pos,0,1); }`;
+
+const THRESH_FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+  vec3 c = texture(u_tex, v_uv).rgb;
+  float lum = dot(c, vec3(0.299,0.587,0.114));
+  fragColor = vec4(c * max(0.0, lum-0.35)*2.8, 1.0);
+}`;
+
+const BLUR_FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform vec2 u_texel;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+  vec2 s = u_texel;
+  vec3 col =
+    texture(u_tex, v_uv - s*4.0).rgb * 0.0270 +
+    texture(u_tex, v_uv - s*3.0).rgb * 0.0648 +
+    texture(u_tex, v_uv - s*2.0).rgb * 0.1210 +
+    texture(u_tex, v_uv - s*1.0).rgb * 0.1762 +
+    texture(u_tex, v_uv        ).rgb * 0.1995 +
+    texture(u_tex, v_uv + s*1.0).rgb * 0.1762 +
+    texture(u_tex, v_uv + s*2.0).rgb * 0.1210 +
+    texture(u_tex, v_uv + s*3.0).rgb * 0.0648 +
+    texture(u_tex, v_uv + s*4.0).rgb * 0.0270;
+  fragColor = vec4(col, 1.0);
+}`;
+
+const COMP_FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_scene;
+uniform sampler2D u_bloom;
+uniform float u_time;
+in vec2 v_uv;
+out vec4 fragColor;
+float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+void main() {
+  vec2 d = v_uv - 0.5;
+  float dist = length(d);
+  float ab = 0.004;
+  float r = texture(u_scene, v_uv + d*ab*dist).r;
+  float g = texture(u_scene, v_uv).g;
+  float b = texture(u_scene, v_uv - d*ab*dist).b;
+  vec3 scene = vec3(r,g,b) + texture(u_bloom, v_uv).rgb * 0.85;
+  // ACES tonemap
+  float A=2.51,B=0.03,C=2.43,D=0.59,E=0.14;
+  scene = clamp((scene*(A*scene+B))/(scene*(C*scene+D)+E), 0.0, 1.0);
+  // Film grain
+  scene += (hash21(v_uv + fract(u_time*0.017)) - 0.5) * 0.035;
+  // Vignette
+  scene *= 1.0 - dist*dist*0.75;
+  fragColor = vec4(scene, 1.0);
+}`;
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function compileShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    throw new Error(gl.getShaderInfoLog(s) + '\n\n' + src);
+  return s;
+}
+
+function linkProgram(gl, vsSrc, fsSrc, tfVaryings) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compileShader(gl, gl.VERTEX_SHADER, vsSrc));
+  gl.attachShader(p, compileShader(gl, gl.FRAGMENT_SHADER, fsSrc));
+  if (tfVaryings) gl.transformFeedbackVaryings(p, tfVaryings, gl.SEPARATE_ATTRIBS);
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+
+function makeVAO(gl, prog, buffers) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  buffers.forEach(({ buf, loc, size }) => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+  });
+  gl.bindVertexArray(null);
+  return vao;
+}
+
+function makeBuf(gl, data, usage = gl.DYNAMIC_COPY) {
+  const b = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, data, usage);
+  return b;
+}
+
+function createFBO(gl, w, h) {
+  const fb  = gl.createFramebuffer();
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { fb, tex, w, h };
+}
+
+// Mat4
+function perspective(fov, aspect, near, far) {
+  const f = Math.tan(Math.PI*0.5 - fov*0.5), ri = 1/(near-far);
+  return new Float32Array([
+    f/aspect,0,0,0,  0,f,0,0,
+    0,0,(near+far)*ri,-1,  0,0,near*far*ri*2,0
+  ]);
+}
+function lookAt(eye, tgt) {
+  const z = nrm(sub(eye, tgt));
+  const x = nrm(crs([0,1,0], z));
+  const y = crs(z, x);
+  return new Float32Array([
+    x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0,
+    -dt3(x,eye),-dt3(y,eye),-dt3(z,eye),1
+  ]);
+}
+function mul4(a,b){const o=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++)o[j*4+i]+=a[k*4+i]*b[j*4+k];return o;}
+function nrm(v){const l=Math.hypot(...v);return v.map(x=>x/l);}
+function sub(a,b){return[a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+function crs(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function dt3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+
+// ─── APP STATE ───────────────────────────────────────────────────────────────
+let gl, canvas;
+let currentMode = 0;
+let colorRGB    = [100/255, 130/255, 1.0];
+let mouseX = 0, mouseY = 0, mouseDown = false;
+let camTheta = 0, camPhi = 0.3, camDist = 4.0;
+let targetTheta = 0, targetPhi = 0.3;
+let lastMX = -1, lastMY = -1;
+let shock = 0.0, shockCenter = [0,0,0];
+let lastTime = 0, current = 0;
+let numParticles = PARTICLE_COUNTS[qualityLevel];
+
+let updateProg, renderProg, starsProg, threshProg, blurProg, compProg;
+let updateVAO = [], renderVAO = [], particleTF = [];
+let posB = [], velB = [], lifeB = [], seedB = [];
+let starsVAO, starsCount;
+let sceneFBO, bloomA, bloomB, quadVAO;
+
+// Audio
+let audioCtx, analyser, gainNode, audioLevel = 0;
+
+// ─── PARTICLES ───────────────────────────────────────────────────────────────
+function initParticles() {
+  numParticles = PARTICLE_COUNTS[qualityLevel];
+
+  updateProg = linkProgram(gl, UPDATE_VS, UPDATE_FS, ['v_pos','v_vel','v_life','v_seed']);
+  renderProg = linkProgram(gl, RENDER_VS, RENDER_FS);
+
+  const pos  = new Float32Array(numParticles * 3);
+  const vel  = new Float32Array(numParticles * 3);
+  const life = new Float32Array(numParticles);
+  const seed = new Float32Array(numParticles);
+
+  for (let i = 0; i < numParticles; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.random() * 3;
+    pos[i*3]   = Math.cos(a)*r;
+    pos[i*3+1] = (Math.random()-0.5)*3;
+    pos[i*3+2] = Math.sin(a)*r;
+    vel[i*3]   = (Math.random()-0.5)*0.5;
+    vel[i*3+1] = (Math.random()-0.5)*0.5;
+    vel[i*3+2] = (Math.random()-0.5)*0.5;
+    life[i]    = Math.random() * 4;
+    seed[i]    = Math.random();
+  }
+
+  for (let i = 0; i < 2; i++) {
+    posB[i]  = makeBuf(gl, pos);
+    velB[i]  = makeBuf(gl, vel);
+    lifeB[i] = makeBuf(gl, life);
+    seedB[i] = makeBuf(gl, seed);
+  }
+
+  for (let i = 0; i < 2; i++) {
+    const j = 1 - i;
+
+    // Update VAO reads from buffer[i]
+    updateVAO[i] = makeVAO(gl, updateProg, [
+      { buf: posB[i],  loc: 0, size: 3 },
+      { buf: velB[i],  loc: 1, size: 3 },
+      { buf: lifeB[i], loc: 2, size: 1 },
+      { buf: seedB[i], loc: 3, size: 1 },
+    ]);
+
+    // TF[i] writes to buffer[j]
+    particleTF[i] = gl.createTransformFeedback();
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, particleTF[i]);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, posB[j]);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 1, velB[j]);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 2, lifeB[j]);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 3, seedB[j]);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+
+    // Render VAO reads from buffer[j] (what TF just wrote)
+    renderVAO[i] = makeVAO(gl, renderProg, [
+      { buf: posB[j],  loc: 0, size: 3 },
+      { buf: velB[j],  loc: 1, size: 3 },
+      { buf: lifeB[j], loc: 2, size: 1 },
+      { buf: seedB[j], loc: 3, size: 1 },
+    ]);
+  }
+}
+
+// ─── STARS ───────────────────────────────────────────────────────────────────
+function initStars() {
+  starsProg  = linkProgram(gl, STARS_VS, STARS_FS);
+  starsCount = 3000;
+  const pos   = new Float32Array(starsCount * 3);
+  const bright = new Float32Array(starsCount);
+  for (let i = 0; i < starsCount; i++) {
+    const th = Math.random()*Math.PI*2, ph = Math.acos(2*Math.random()-1);
+    pos[i*3]   = Math.sin(ph)*Math.cos(th);
+    pos[i*3+1] = Math.cos(ph);
+    pos[i*3+2] = Math.sin(ph)*Math.sin(th);
+    bright[i]  = Math.random() * Math.random();
+  }
+  const pb = makeBuf(gl, pos, gl.STATIC_DRAW);
+  const bb = makeBuf(gl, bright, gl.STATIC_DRAW);
+  starsVAO = makeVAO(gl, starsProg, [
+    { buf: pb, loc: 0, size: 3 },
+    { buf: bb, loc: 1, size: 1 },
+  ]);
+}
+
+// ─── POST-PROCESSING ─────────────────────────────────────────────────────────
+function initPost() {
+  threshProg = linkProgram(gl, QUAD_VS, THRESH_FS);
+  blurProg   = linkProgram(gl, QUAD_VS, BLUR_FS);
+  compProg   = linkProgram(gl, QUAD_VS, COMP_FS);
+
+  const qb = makeBuf(gl, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  quadVAO = makeVAO(gl, compProg, [{ buf: qb, loc: 0, size: 2 }]);
+
+  allocFBOs();
+}
+
+function allocFBOs() {
+  const w = canvas.width, h = canvas.height;
+  const hw = w >> 1, hh = h >> 1;
+  sceneFBO = createFBO(gl, w, h);
+  bloomA   = createFBO(gl, hw, hh);
+  bloomB   = createFBO(gl, hw, hh);
+}
+
+// ─── RESIZE ──────────────────────────────────────────────────────────────────
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  if (sceneFBO) allocFBOs();
+}
+
+// ─── AUDIO ───────────────────────────────────────────────────────────────────
+function initAudio() {
+  audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+  gainNode  = audioCtx.createGain();
+  gainNode.gain.value = 0.3;
+  analyser  = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  gainNode.connect(analyser);
+  analyser.connect(audioCtx.destination);
+
+  // Ambient drone
+  [[55,0.09],[82.5,0.06],[110,0.04],[165,0.025],[220,0.015],[330,0.01]].forEach(([freq,gain],i) => {
+    const osc = audioCtx.createOscillator();
+    const og  = audioCtx.createGain();
+    osc.type = i < 2 ? 'sine' : 'triangle';
+    osc.frequency.value = freq;
+    osc.detune.value    = (Math.random()-0.5)*12;
+    og.gain.value = gain;
+    osc.connect(og); og.connect(gainNode); osc.start();
+
+    const lfo = audioCtx.createOscillator();
+    const lg  = audioCtx.createGain();
+    lfo.frequency.value = 0.07 + Math.random()*0.18;
+    lg.gain.value = freq * 0.018;
+    lfo.connect(lg); lg.connect(osc.frequency); lfo.start();
+  });
+}
+
+function readAudioLevel() {
+  if (!analyser) return 0;
+  const d = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(d);
+  return d.reduce((s,v)=>s+v,0) / d.length / 255;
+}
+
+// ─── DRAW QUAD ───────────────────────────────────────────────────────────────
+function drawQuad() {
+  gl.bindVertexArray(quadVAO);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.bindVertexArray(null);
+}
+
+// ─── FRAME ───────────────────────────────────────────────────────────────────
+function frame(ts) {
+  const dt  = Math.min((ts - lastTime) * 0.001, 0.05);
+  lastTime  = ts;
+  audioLevel = readAudioLevel();
+
+  // Smooth camera
+  camTheta += (targetTheta - camTheta) * 0.06;
+  camPhi   += (targetPhi   - camPhi)   * 0.06;
+
+  const eye = [
+    camDist * Math.cos(camPhi) * Math.sin(camTheta),
+    camDist * Math.sin(camPhi),
+    camDist * Math.cos(camPhi) * Math.cos(camTheta),
+  ];
+  const view = lookAt(eye, [0,0,0]);
+  const proj = perspective(0.8, canvas.width/canvas.height, 0.01, 300);
+  const mvp  = mul4(proj, view);
+
+  // Mouse → world (approximate plane z=0)
+  const mx = (mouseX/canvas.width)*2-1;
+  const my = 1-(mouseY/canvas.height)*2;
+  const mouse3D = [mx*camDist*0.72, my*camDist*0.72, 0];
+
+  if (shock > 0) shock = Math.max(0, shock - dt * 0.5);
+
+  // ── UPDATE PASS ────────────────────────────────────────────────────────────
+  gl.useProgram(updateProg);
+  const ul = n => gl.getUniformLocation(updateProg, n);
+  gl.uniform1f(ul('u_time'), ts * 0.001);
+  gl.uniform1f(ul('u_dt'),   dt);
+  gl.uniform1i(ul('u_mode'), currentMode);
+  gl.uniform3fv(ul('u_mouse3D'), mouse3D);
+  gl.uniform1f(ul('u_attract'), mouseDown ? 1.0 : 0.0);
+  gl.uniform1f(ul('u_shock'), shock);
+  gl.uniform3fv(ul('u_shockCenter'), shockCenter);
+
+  gl.bindVertexArray(updateVAO[current]);
+  gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, particleTF[current]);
+  gl.enable(gl.RASTERIZER_DISCARD);
+  gl.beginTransformFeedback(gl.POINTS);
+  gl.drawArrays(gl.POINTS, 0, numParticles);
+  gl.endTransformFeedback();
+  gl.disable(gl.RASTERIZER_DISCARD);
+  gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+  gl.bindVertexArray(null);
+
+  // ── RENDER SCENE TO FBO ────────────────────────────────────────────────────
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fb);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0.018, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);
+
+  // Stars
+  gl.useProgram(starsProg);
+  gl.uniformMatrix4fv(gl.getUniformLocation(starsProg,'u_mvp'), false, mvp);
+  gl.bindVertexArray(starsVAO);
+  gl.drawArrays(gl.POINTS, 0, starsCount);
+
+  // Particles
+  gl.useProgram(renderProg);
+  const rl = n => gl.getUniformLocation(renderProg, n);
+  gl.uniformMatrix4fv(rl('u_mvp'), false, mvp);
+  gl.uniform3fv(rl('u_color'), colorRGB);
+  gl.uniform1i(rl('u_mode'), currentMode);
+  gl.uniform1f(rl('u_audio'), audioLevel);
+  gl.bindVertexArray(renderVAO[current]);
+  gl.drawArrays(gl.POINTS, 0, numParticles);
+  gl.bindVertexArray(null);
+  gl.disable(gl.BLEND);
+
+  // ── BLOOM ──────────────────────────────────────────────────────────────────
+  const hw = canvas.width >> 1, hh = canvas.height >> 1;
+
+  // Threshold
+  gl.bindFramebuffer(gl.FRAMEBUFFER, bloomA.fb);
+  gl.viewport(0, 0, hw, hh);
+  gl.useProgram(threshProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+  gl.uniform1i(gl.getUniformLocation(threshProg,'u_tex'), 0);
+  drawQuad();
+
+  // Blur H
+  gl.bindFramebuffer(gl.FRAMEBUFFER, bloomB.fb);
+  gl.useProgram(blurProg);
+  gl.bindTexture(gl.TEXTURE_2D, bloomA.tex);
+  gl.uniform1i(gl.getUniformLocation(blurProg,'u_tex'), 0);
+  gl.uniform2f(gl.getUniformLocation(blurProg,'u_texel'), 1/hw, 0);
+  drawQuad();
+
+  // Blur V
+  gl.bindFramebuffer(gl.FRAMEBUFFER, bloomA.fb);
+  gl.bindTexture(gl.TEXTURE_2D, bloomB.tex);
+  gl.uniform2f(gl.getUniformLocation(blurProg,'u_texel'), 0, 1/hh);
+  drawQuad();
+
+  // ── COMPOSITE ──────────────────────────────────────────────────────────────
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(compProg);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+  gl.uniform1i(gl.getUniformLocation(compProg,'u_scene'), 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, bloomA.tex);
+  gl.uniform1i(gl.getUniformLocation(compProg,'u_bloom'), 1);
+  gl.uniform1f(gl.getUniformLocation(compProg,'u_time'), ts * 0.001);
+  drawQuad();
+
+  current = 1 - current;
+  requestAnimationFrame(frame);
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+function initGL() {
+  canvas = document.getElementById('canvas');
+  gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+  if (!gl) { alert('WebGL2 is required. Please use Chrome or Firefox.'); return false; }
+
+  gl.getExtension('EXT_color_buffer_float');
+
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  return true;
+}
+
+function start() {
+  if (!initGL()) return;
+  try {
+    initParticles();
+    initStars();
+    initPost();
+  } catch (e) {
+    console.error(e);
+    alert('Shader error:\n' + e.message);
+    return;
+  }
+  window.addEventListener('resize', resize);
+  requestAnimationFrame(frame);
+}
+
+// ─── UI ──────────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  // Mode buttons
+  document.querySelectorAll('.btn[data-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentMode = parseInt(btn.dataset.mode);
+      document.querySelectorAll('.btn[data-mode]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Color sliders
+  const syncColor = () => {
+    colorRGB = [
+      +document.getElementById('r-sl').value / 255,
+      +document.getElementById('g-sl').value / 255,
+      +document.getElementById('b-sl').value / 255,
+    ];
+  };
+  ['r-sl','g-sl','b-sl'].forEach(id => document.getElementById(id).addEventListener('input', syncColor));
+
+  // Quality
+  const qBtn = document.getElementById('quality-btn');
+  qBtn.addEventListener('click', () => {
+    qualityLevel = (qualityLevel + 1) % 3;
+    qBtn.textContent = QUALITY_LABELS[qualityLevel];
+    if (gl) initParticles(); // reinit buffers
+  });
+
+  // Volume
+  document.getElementById('vol-sl').addEventListener('input', e => {
+    if (gainNode) gainNode.gain.value = e.target.value / 100 * 0.5;
+  });
+
+  // Keyboard
+  window.addEventListener('keydown', e => {
+    const k = parseInt(e.key);
+    if (k >= 1 && k <= 5) {
+      currentMode = k - 1;
+      document.querySelectorAll('.btn[data-mode]').forEach(b => b.classList.remove('active'));
+      document.querySelector(`.btn[data-mode="${currentMode}"]`).classList.add('active');
+    }
+  });
+
+  // Mouse
+  window.addEventListener('mousemove', e => {
+    if (lastMX >= 0 && !mouseDown) {
+      targetTheta -= (e.clientX - lastMX) * 0.004;
+      targetPhi    = Math.max(-1.3, Math.min(1.3, targetPhi - (e.clientY - lastMY) * 0.004));
+    }
+    lastMX = e.clientX; lastMY = e.clientY;
+    mouseX = e.clientX; mouseY = e.clientY;
+  });
+  window.addEventListener('mousedown', () => { mouseDown = true; });
+  window.addEventListener('mouseup', () => {
+    mouseDown = false;
+    shock = 1.0;
+    shockCenter = [
+      ((mouseX/canvas.width)*2-1)*camDist*0.72,
+      (1-(mouseY/canvas.height)*2)*camDist*0.72,
+      0,
+    ];
+  });
+  window.addEventListener('wheel', e => {
+    camDist = Math.max(1.0, Math.min(18.0, camDist + e.deltaY * 0.008));
+  }, { passive: true });
+
+  // Touch support
+  let prevTouch = null;
+  window.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    if (prevTouch) {
+      targetTheta -= (t.clientX - prevTouch.x) * 0.005;
+      targetPhi    = Math.max(-1.3, Math.min(1.3, targetPhi - (t.clientY - prevTouch.y) * 0.005));
+    }
+    prevTouch = { x: t.clientX, y: t.clientY };
+  }, { passive: false });
+  window.addEventListener('touchend', () => { prevTouch = null; });
+
+  // Start overlay
+  document.getElementById('start-overlay').addEventListener('click', () => {
+    document.getElementById('start-overlay').style.display = 'none';
+    initAudio();
+    start();
+  }, { once: true });
+});
+</script>
+</body>
+</html>
